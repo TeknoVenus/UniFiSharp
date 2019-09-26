@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -12,14 +11,15 @@ namespace UniFiSharp
 {
     internal class DefaultUniFiRestClient : RestClient, IUniFiRestClient
     {
-        private string _username, _password;
+        private readonly string _username;
+        private readonly string _password;
 
         internal DefaultUniFiRestClient(Uri baseUrl, string username, string password, bool ignoreSslValidation) : base(baseUrl)
         {
             _username = username;
             _password = password;
 
-            CookieContainer = new System.Net.CookieContainer();
+            CookieContainer = new CookieContainer();
 
             AddHandler("application/json", NewtonsoftJsonSerializer.Default);
             AddHandler("text/json", NewtonsoftJsonSerializer.Default);
@@ -29,7 +29,7 @@ namespace UniFiSharp
 
             if (ignoreSslValidation)
             {
-                this.RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
+                RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
             }
         }
 
@@ -101,8 +101,19 @@ namespace UniFiSharp
             var request = new RestRequest(url, method);
             if ((method == Method.POST || method == Method.PUT) && jsonBody != null)
                 request.AddJsonBody(jsonBody);
+
             var envelope = await ExecuteRequest<T>(request);
-            return (envelope.Data == null) ? default(T) : envelope.Data[0];
+            if (envelope.Data != null && envelope.Data.Length > 0)
+            {
+                return envelope.Data[0];
+            }
+
+            if (envelope.Metadata.ResultCode.ToLower() == "error")
+            {
+                throw new UniFiApiException($"UniFi API returned an error: {envelope.Metadata.Message}");
+            }
+
+            return default;
         }
 
         private async Task<IList<T>> UniFiRequestMany<T>(Method method, string url, object jsonBody = null) where T : new()
@@ -111,7 +122,7 @@ namespace UniFiSharp
             if ((method == Method.POST || method == Method.PUT) && jsonBody != null)
                 request.AddJsonBody(jsonBody);
             var envelope = await ExecuteRequest<T>(request);
-            return (envelope.Data == null) ? new List<T>() : new List<T>(envelope.Data);
+            return envelope.Data == null ? new List<T>() : new List<T>(envelope.Data);
         }
 
         public async Task Authenticate()
@@ -128,12 +139,17 @@ namespace UniFiSharp
         private async Task<JsonMessageEnvelope<T>> ExecuteRequest<T>(IRestRequest request, bool attemptReauthentication = true) where T : new()
         {
             this.AddDefaultHeader("Referrer", BaseUrl.ToString());
-            this.FollowRedirects = true;
+            FollowRedirects = true;
 
-            if (this.CookieContainer.GetCookies(this.BaseUrl).Count > 0)
+            if (CookieContainer.GetCookies(BaseUrl).Count > 0)
             {
-                try { this.AddDefaultHeader("X-Csrf-Token", this.CookieContainer.GetCookies(this.BaseUrl)["csrf_token"].Value); }
-                catch { }
+                try
+                {
+                    this.AddDefaultHeader("X-Csrf-Token", CookieContainer.GetCookies(BaseUrl)["csrf_token"].Value);
+                }
+                catch
+                {
+                }
             }
 
             request.RequestFormat = DataFormat.Json;
@@ -157,7 +173,8 @@ namespace UniFiSharp
         }
 
         /// <summary>
-        /// Upload a file to the UniFi controller. The only known use of this at the moment is for uploading .ogg files for the AP-AC-EDU APs
+        ///     Upload a file to the UniFi controller. The only known use of this at the moment is for uploading .ogg files for the
+        ///     AP-AC-EDU APs
         /// </summary>
         /// <param name="url"></param>
         /// <param name="name"></param>
@@ -173,17 +190,22 @@ namespace UniFiSharp
             this.AddDefaultHeader("Referrer", BaseUrl.ToString());
 
             // Bodge to work around the fact uploads don't return the normal metadata if unauthorized
-            this.FollowRedirects = false;
+            FollowRedirects = false;
 
-            if (this.CookieContainer.GetCookies(this.BaseUrl).Count > 0)
+            if (CookieContainer.GetCookies(BaseUrl).Count > 0)
             {
-                try { this.AddDefaultHeader("X-Csrf-Token", this.CookieContainer.GetCookies(this.BaseUrl)["csrf_token"].Value); }
-                catch { }
+                try
+                {
+                    this.AddDefaultHeader("X-Csrf-Token", CookieContainer.GetCookies(BaseUrl)["csrf_token"].Value);
+                }
+                catch
+                {
+                }
             }
 
             var request = new RestRequest(url, Method.POST)
             {
-                AlwaysMultipartFormData = true,
+                AlwaysMultipartFormData = true
             };
 
             request.AddParameter("name", name, ParameterType.RequestBody);
@@ -203,7 +225,5 @@ namespace UniFiSharp
                 }
             }
         }
-
-
     }
 }
